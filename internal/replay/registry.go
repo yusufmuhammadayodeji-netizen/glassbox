@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dotandev/glassbox/internal/network"
 	"github.com/dotandev/glassbox/internal/snapshot"
 )
 
@@ -51,6 +52,9 @@ type Registry struct {
 	TxHash string `json:"tx_hash"`
 	// Network is the Stellar network (testnet, mainnet, futurenet).
 	Network string `json:"network"`
+	// NetworkSnapshot captures the full network configuration for deterministic
+	// comparison during replay. Nil for registries created before this feature.
+	NetworkSnapshot *network.Snapshot `json:"network_snapshot,omitempty"`
 	// EnvelopeXdr is the base64-encoded transaction envelope XDR.
 	EnvelopeXdr string `json:"envelope_xdr"`
 	// ResultMetaXdr is the base64-encoded transaction result meta XDR.
@@ -64,12 +68,20 @@ type Registry struct {
 
 // New creates an empty Registry with the supplied metadata.
 func New(glassboxVersion, txHash, network, envelopeXdr, resultMetaXdr string) *Registry {
+	return NewWithSnapshot(glassboxVersion, txHash, network, envelopeXdr, resultMetaXdr, nil)
+}
+
+// NewWithSnapshot creates an empty Registry with an optional NetworkSnapshot.
+// The snapshot captures the full network configuration for deterministic replay
+// comparison. When nil, the registry behaves identically to New.
+func NewWithSnapshot(glassboxVersion, txHash, networkName, envelopeXdr, resultMetaXdr string, netSnapshot *network.Snapshot) *Registry {
 	return &Registry{
 		SchemaVersion:   SchemaVersion,
 		GlassboxVersion: glassboxVersion,
 		CreatedAt:       time.Now().UTC(),
 		TxHash:          txHash,
-		Network:         network,
+		Network:         networkName,
+		NetworkSnapshot: netSnapshot,
 		EnvelopeXdr:     envelopeXdr,
 		ResultMetaXdr:   resultMetaXdr,
 		Entries:         make([]Entry, 0),

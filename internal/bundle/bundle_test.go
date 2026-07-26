@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dotandev/glassbox/internal/bundle"
+	"github.com/dotandev/glassbox/internal/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -239,4 +240,149 @@ func TestManifest_ReplayInputsPreserved(t *testing.T) {
 	assert.Equal(t, uint32(22), loaded.Provenance.ProtocolVersion)
 	assert.Equal(t, uint32(42), loaded.Provenance.LedgerSequence)
 	assert.True(t, loaded.Verify().OK, "loaded bundle must pass integrity check")
+}
+
+// ── NetworkSnapshot integration ──────────────────────────────────────────────
+
+func TestManifest_WithNetworkSnapshot_RoundTrip(t *testing.T) {
+	netSnap := network.NewSnapshot(
+		"testnet",
+		"Test SDF Network ; September 2015",
+		"https://horizon-testnet.stellar.org",
+		"https://soroban-testnet.stellar.org",
+		22,
+	)
+
+	m := bundle.NewWithSnapshot(
+		"0.0.0-test",
+		"abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+		1000,
+		22,
+		validNetwork(),
+		"envelopeXDRdata==",
+		"resultMetaXDRdata==",
+		validLedgerState(),
+		netSnap,
+	)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bundle_with_snapshot.json")
+	err := m.SaveToFile(path)
+	require.NoError(t, err)
+
+	loaded, err := bundle.LoadFromFile(path)
+	require.NoError(t, err)
+
+	require.NotNil(t, loaded.NetworkSnapshot)
+	assert.Equal(t, "testnet", loaded.NetworkSnapshot.Name)
+	assert.Equal(t, "Test SDF Network ; September 2015", loaded.NetworkSnapshot.Passphrase)
+	assert.False(t, loaded.NetworkSnapshot.IsCustom)
+	assert.Equal(t, "https://horizon-testnet.stellar.org", loaded.NetworkSnapshot.HorizonURL)
+	assert.Equal(t, "https://soroban-testnet.stellar.org", loaded.NetworkSnapshot.SorobanRPCURL)
+	assert.Equal(t, uint32(22), loaded.NetworkSnapshot.ProtocolVersion)
+	assert.True(t, loaded.Verify().OK, "loaded bundle must pass integrity check")
+}
+
+func TestManifest_WithCustomNetworkSnapshot_RoundTrip(t *testing.T) {
+	netSnap := network.NewSnapshot(
+		"my-private-net",
+		"My Custom Private Network ; October 2024",
+		"https://horizon.my-private-net.local",
+		"https://soroban.my-private-net.local",
+		22,
+	)
+
+	m := bundle.NewWithSnapshot(
+		"0.0.0-test",
+		"abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+		1000,
+		22,
+		bundle.NetworkIdentity{Name: "my-private-net", Passphrase: "My Custom Private Network ; October 2024"},
+		"envelopeXDRdata==",
+		"resultMetaXDRdata==",
+		validLedgerState(),
+		netSnap,
+	)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bundle_custom_net.json")
+	err := m.SaveToFile(path)
+	require.NoError(t, err)
+
+	loaded, err := bundle.LoadFromFile(path)
+	require.NoError(t, err)
+
+	require.NotNil(t, loaded.NetworkSnapshot)
+	assert.True(t, loaded.NetworkSnapshot.IsCustom)
+	assert.Equal(t, "my-private-net", loaded.NetworkSnapshot.Name)
+	assert.True(t, loaded.Verify().OK)
+}
+
+func TestManifest_NetworkSnapshot_TamperedDetection(t *testing.T) {
+	netSnap := network.NewSnapshot(
+		"testnet",
+		"Test SDF Network ; September 2015",
+		"https://horizon-testnet.stellar.org",
+		"https://soroban-testnet.stellar.org",
+		22,
+	)
+
+	m := bundle.NewWithSnapshot(
+		"0.0.0-test",
+		"abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+		1000,
+		22,
+		validNetwork(),
+		"envelopeXDRdata==",
+		"resultMetaXDRdata==",
+		validLedgerState(),
+		netSnap,
+	)
+
+	// Tamper with the snapshot after checksum computation
+	m.NetworkSnapshot.Name = "mainnet"
+	report := m.Verify()
+	assert.False(t, report.OK)
+	assert.Contains(t, report.FieldErrors, bundle.MemberNetworkSnapshot)
+}
+
+func TestManifest_NetworkSnapshot_OmittedWhenNil(t *testing.T) {
+	m := validManifest()
+	assert.Nil(t, m.NetworkSnapshot)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bundle_no_snapshot.json")
+	err := m.SaveToFile(path)
+	require.NoError(t, err)
+
+	loaded, err := bundle.LoadFromFile(path)
+	require.NoError(t, err)
+	assert.Nil(t, loaded.NetworkSnapshot)
+	assert.True(t, loaded.Verify().OK)
+}
+
+func TestManifest_NetworkSnapshot_ChecksumIndependence(t *testing.T) {
+	// Two manifests with different network snapshots should have different
+	// network_snapshot checksums but the same other checksums.
+	netSnap1 := network.NewSnapshot("testnet", "Test SDF Network ; September 2015",
+		"https://horizon1.stellar.org", "https://rpc1.stellar.org", 22)
+	netSnap2 := network.NewSnapshot("testnet", "Test SDF Network ; September 2015",
+		"https://horizon2.stellar.org", "https://rpc2.stellar.org", 22)
+
+	m1 := bundle.NewWithSnapshot("dev", "hash", 1, 22, validNetwork(),
+		"env==", "meta==", validLedgerState(), netSnap1)
+	m2 := bundle.NewWithSnapshot("dev", "hash", 1, 22, validNetwork(),
+		"env==", "meta==", validLedgerState(), netSnap2)
+
+	// Other checksums should be identical
+	assert.Equal(t, m1.Checksums[bundle.MemberEnvelopeXDR], m2.Checksums[bundle.MemberEnvelopeXDR])
+	assert.Equal(t, m1.Checksums[bundle.MemberResultMetaXDR], m2.Checksums[bundle.MemberResultMetaXDR])
+	assert.Equal(t, m1.Checksums[bundle.MemberLedgerState], m2.Checksums[bundle.MemberLedgerState])
+	assert.Equal(t, m1.Checksums[bundle.MemberProvenance], m2.Checksums[bundle.MemberProvenance])
+	assert.Equal(t, m1.Checksums[bundle.MemberNetwork], m2.Checksums[bundle.MemberNetwork])
+
+	// But network_snapshot checksums should differ
+	assert.NotEqual(t, m1.Checksums[bundle.MemberNetworkSnapshot],
+		m2.Checksums[bundle.MemberNetworkSnapshot],
+		"different URLs should produce different network_snapshot checksums")
 }

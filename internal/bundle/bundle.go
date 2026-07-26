@@ -29,6 +29,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/dotandev/glassbox/internal/network"
 )
 
 // FormatVersion is the current on-disk format version.  Increment this when
@@ -45,6 +47,11 @@ type Manifest struct {
 
 	// Network identifies the Stellar network.
 	Network NetworkIdentity `json:"network"`
+
+	// NetworkSnapshot captures the full network configuration for deterministic
+	// comparison during replay. This includes the passphrase, RPC endpoints, and
+	// protocol version. Nil for bundles created before this feature.
+	NetworkSnapshot *network.Snapshot `json:"network_snapshot,omitempty"`
 
 	// Transaction holds the raw XDR payloads.
 	Transaction TransactionArtifacts `json:"transaction"`
@@ -91,11 +98,12 @@ type TransactionArtifacts struct {
 
 // MemberName constants match the keys used in Checksums.
 const (
-	MemberEnvelopeXDR   = "envelope_xdr"
-	MemberResultMetaXDR = "result_meta_xdr"
-	MemberLedgerState   = "ledger_state"
-	MemberProvenance    = "provenance"
-	MemberNetwork       = "network"
+	MemberEnvelopeXDR    = "envelope_xdr"
+	MemberResultMetaXDR  = "result_meta_xdr"
+	MemberLedgerState    = "ledger_state"
+	MemberProvenance     = "provenance"
+	MemberNetwork        = "network"
+	MemberNetworkSnapshot = "network_snapshot"
 )
 
 // New builds a Manifest from the supplied parameters and computes checksums for
@@ -105,10 +113,28 @@ func New(
 	txHash string,
 	ledgerSequence uint32,
 	protocolVersion uint32,
-	network NetworkIdentity,
+	network_ NetworkIdentity,
 	envelopeXDR string,
 	resultMetaXDR string,
 	ledgerState map[string]string,
+) *Manifest {
+	return NewWithSnapshot(glassboxVersion, txHash, ledgerSequence, protocolVersion,
+		network_, envelopeXDR, resultMetaXDR, ledgerState, nil)
+}
+
+// NewWithSnapshot builds a Manifest with an optional NetworkSnapshot. The
+// snapshot captures the full network configuration for deterministic replay
+// comparison. When nil, the bundle behaves identically to New.
+func NewWithSnapshot(
+	glassboxVersion string,
+	txHash string,
+	ledgerSequence uint32,
+	protocolVersion uint32,
+	network_ NetworkIdentity,
+	envelopeXDR string,
+	resultMetaXDR string,
+	ledgerState map[string]string,
+	netSnapshot *network.Snapshot,
 ) *Manifest {
 	m := &Manifest{
 		FormatVersion: FormatVersion,
@@ -119,7 +145,8 @@ func New(
 			LedgerSequence:  ledgerSequence,
 			ProtocolVersion: protocolVersion,
 		},
-		Network: network,
+		Network:         network_,
+		NetworkSnapshot: netSnapshot,
 		Transaction: TransactionArtifacts{
 			EnvelopeXDR:   envelopeXDR,
 			ResultMetaXDR: resultMetaXDR,
@@ -349,6 +376,13 @@ func computeChecksums(m *Manifest) map[string]string {
 	}
 	if data, err := json.Marshal(m.Network); err == nil {
 		checksums[MemberNetwork] = sha256Hex(data)
+	}
+
+	// Network snapshot is checksummed when present.
+	if m.NetworkSnapshot != nil {
+		if data, err := json.Marshal(m.NetworkSnapshot); err == nil {
+			checksums[MemberNetworkSnapshot] = sha256Hex(data)
+		}
 	}
 
 	return checksums

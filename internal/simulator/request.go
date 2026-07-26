@@ -39,6 +39,9 @@ type SimulationRequest struct {
 	ContractSourcePath *string `json:"contract_source_path,omitempty"`
 	// SkipSourceMapping bypasses DWARF parsing and Git link generation for faster raw replay.
 	SkipSourceMapping bool `json:"skip_source_mapping,omitempty"`
+	// NetworkPassphrase is the Stellar network passphrase. When present, the
+	// Rust simulator can use it to validate network-specific constraints.
+	NetworkPassphrase *string `json:"network_passphrase,omitempty"`
 }
 
 type ResourceCalibration struct {

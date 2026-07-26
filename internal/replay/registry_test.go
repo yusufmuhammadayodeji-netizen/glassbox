@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dotandev/glassbox/internal/network"
 	"github.com/dotandev/glassbox/internal/snapshot"
 )
 
@@ -425,5 +426,160 @@ func TestComputeSnapshotChecksum_ChangesOnMutation(t *testing.T) {
 	s2 := makeSnap(t, map[string]string{"k": "v2"})
 	if computeSnapshotChecksum(s1) == computeSnapshotChecksum(s2) {
 		t.Error("expected different checksums for different snapshots")
+	}
+}
+
+// --- NetworkSnapshot integration ---
+
+func TestNewWithSnapshot_Fields(t *testing.T) {
+	netSnap := network.NewSnapshot(
+		"testnet",
+		"Test SDF Network ; September 2015",
+		"https://horizon-testnet.stellar.org",
+		"https://soroban-testnet.stellar.org",
+		22,
+	)
+
+	r := NewWithSnapshot("v1.0.0", "abc123", "testnet", "envelopeXDR", "resultMetaXDR", netSnap)
+
+	if r.NetworkSnapshot == nil {
+		t.Fatal("expected non-nil NetworkSnapshot")
+	}
+	if r.NetworkSnapshot.Name != "testnet" {
+		t.Errorf("expected network name testnet, got %s", r.NetworkSnapshot.Name)
+	}
+	if r.NetworkSnapshot.Passphrase != "Test SDF Network ; September 2015" {
+		t.Errorf("unexpected passphrase: %s", r.NetworkSnapshot.Passphrase)
+	}
+	if r.NetworkSnapshot.Fingerprint == "" {
+		t.Error("expected non-empty fingerprint")
+	}
+}
+
+func TestNewWithSnapshot_NilSnapshot(t *testing.T) {
+	r := NewWithSnapshot("v1.0.0", "abc123", "testnet", "envelopeXDR", "resultMetaXDR", nil)
+	if r.NetworkSnapshot != nil {
+		t.Error("expected nil NetworkSnapshot when nil is passed")
+	}
+}
+
+func TestNew_BackwardCompatible(t *testing.T) {
+	r := New("v1.0.0", "abc123", "testnet", "envelopeXDR", "resultMetaXDR")
+	if r.NetworkSnapshot != nil {
+		t.Error("expected nil NetworkSnapshot from legacy New()")
+	}
+}
+
+func TestRegistry_WithNetworkSnapshot_RoundTrip(t *testing.T) {
+	netSnap := network.NewSnapshot(
+		"testnet",
+		"Test SDF Network ; September 2015",
+		"https://horizon-testnet.stellar.org",
+		"https://soroban-testnet.stellar.org",
+		22,
+	)
+
+	r := NewWithSnapshot("v1.0.0", "abc123", "testnet", "envelopeXDR", "resultMetaXDR", netSnap)
+	r.Add(1000, makeSnap(t, map[string]string{"k": "v"}))
+
+	path := filepath.Join(t.TempDir(), "registry_snapshot.json")
+	if err := r.SaveToFile(path); err != nil {
+		t.Fatalf("SaveToFile: %v", err)
+	}
+
+	loaded, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+
+	if loaded.NetworkSnapshot == nil {
+		t.Fatal("expected non-nil NetworkSnapshot after round-trip")
+	}
+	if loaded.NetworkSnapshot.Name != "testnet" {
+		t.Errorf("expected name testnet, got %s", loaded.NetworkSnapshot.Name)
+	}
+	if loaded.NetworkSnapshot.Passphrase != "Test SDF Network ; September 2015" {
+		t.Errorf("unexpected passphrase: %s", loaded.NetworkSnapshot.Passphrase)
+	}
+}
+
+func TestRegistry_WithCustomNetworkSnapshot_RoundTrip(t *testing.T) {
+	netSnap := network.NewSnapshot(
+		"my-private-net",
+		"My Custom Private Network ; October 2024",
+		"https://horizon.my-private-net.local",
+		"https://soroban.my-private-net.local",
+		22,
+	)
+
+	r := NewWithSnapshot("v1.0.0", "abc123", "my-private-net", "envelopeXDR", "resultMetaXDR", netSnap)
+
+	path := filepath.Join(t.TempDir(), "registry_custom.json")
+	if err := r.SaveToFile(path); err != nil {
+		t.Fatalf("SaveToFile: %v", err)
+	}
+
+	loaded, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+
+	if loaded.NetworkSnapshot == nil {
+		t.Fatal("expected non-nil NetworkSnapshot after round-trip")
+	}
+	if !loaded.NetworkSnapshot.IsCustom {
+		t.Error("expected IsCustom to be true")
+	}
+	if loaded.NetworkSnapshot.Name != "my-private-net" {
+		t.Errorf("expected name my-private-net, got %s", loaded.NetworkSnapshot.Name)
+	}
+}
+
+func TestRegistry_NetworkSnapshot_OmittedWhenNil(t *testing.T) {
+	r := New("v1.0.0", "abc123", "testnet", "envelopeXDR", "resultMetaXDR")
+
+	path := filepath.Join(t.TempDir(), "registry_no_snapshot.json")
+	if err := r.SaveToFile(path); err != nil {
+		t.Fatalf("SaveToFile: %v", err)
+	}
+
+	// Verify the JSON does not contain network_snapshot
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), "network_snapshot") {
+		t.Error("expected network_snapshot to be omitted when nil")
+	}
+
+	loaded, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadFromFile: %v", err)
+	}
+	if loaded.NetworkSnapshot != nil {
+		t.Error("expected nil NetworkSnapshot after round-trip")
+	}
+}
+
+func TestRegistry_NetworkSnapshot_PassphraseMismatch(t *testing.T) {
+	snap1 := network.NewSnapshot("testnet", "Test SDF Network ; September 2015",
+		"https://horizon-testnet.stellar.org", "https://soroban-testnet.stellar.org", 22)
+	snap2 := network.NewSnapshot("mainnet", "Public Global Stellar Network ; September 2015",
+		"https://horizon.stellar.org", "https://soroban-rpc.mainnet.stellar.org", 22)
+
+	if snap1.Match(snap2) {
+		t.Error("expected testnet and mainnet snapshots to not match")
+	}
+	if !snap1.Match(network.NewSnapshot("testnet", "Test SDF Network ; September 2015", "", "", 0)) {
+		t.Error("expected same passphrase to match regardless of URLs")
+	}
+}
+
+func TestRegistry_NetworkSnapshot_JSONOmitEmpty(t *testing.T) {
+	r := New("v1.0.0", "abc123", "testnet", "envelopeXDR", "resultMetaXDR")
+
+	data, _ := json.Marshal(r)
+	var raw map[string]interface{}
+	json.Unmarshal(data, &raw)
+
+	if _, exists := raw["network_snapshot"]; exists {
+		t.Error("network_snapshot should be omitted from JSON when nil")
 	}
 }

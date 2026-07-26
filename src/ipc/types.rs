@@ -33,12 +33,29 @@ use serde::{Serialize, Deserialize};
 pub struct SimulationRequestSchema {
     network: Network,
 
+    /// Stellar network passphrase for transaction signing.
+    /// When present, the simulator can validate network-specific constraints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network_passphrase: Option<String>,
+
     /// Client-generated unique request identifier
     request_id: String,
 
     version: String,
 
     xdr: String,
+}
+
+impl SimulationRequestSchema {
+    /// Returns the network passphrase if provided.
+    pub fn network_passphrase(&self) -> Option<&str> {
+        self.network_passphrase.as_deref()
+    }
+
+    /// Returns the network type.
+    pub fn network(&self) -> &Network {
+        &self.network
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -92,6 +92,10 @@ func (r *SimulationResponseSchema) Marshal() ([]byte, error) {
 
 type SimulationRequestSchema struct {
 	Network Network `json:"network"`
+	// NetworkPassphrase is the Stellar network passphrase required for
+	// transaction signing. When non-empty, the Rust simulator can use it
+	// to validate network-specific constraints.
+	NetworkPassphrase string `json:"network_passphrase,omitempty"`
 	// Client-generated unique request identifier
 	RequestID string `json:"request_id"`
 	Version   string `json:"version"`
